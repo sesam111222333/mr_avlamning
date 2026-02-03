@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useCallback, ReactNode } from "rea
 
 interface FileInfo {
   name: string;
+  path: string;
   isDirectory: boolean;
   size?: number;
   modified?: string;

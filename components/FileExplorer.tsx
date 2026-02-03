@@ -4,11 +4,23 @@ import { useEffect, useState, useCallback } from "react";
 import { useApp } from "@/context/AppContext";
 import { cn } from "@/lib/utils";
 
-function FileIcon({ isDirectory }: { isDirectory: boolean }) {
+interface FileInfo {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size?: number;
+  modified?: string;
+}
+
+function FileIcon({ isDirectory, isExpanded }: { isDirectory: boolean; isExpanded?: boolean }) {
   if (isDirectory) {
     return (
       <svg className="w-4 h-4 text-dracula-orange" fill="currentColor" viewBox="0 0 20 20">
-        <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+        {isExpanded ? (
+          <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1H8a3 3 0 00-3 3v1.5a1.5 1.5 0 01-3 0V6z" clipRule="evenodd" />
+        ) : (
+          <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+        )}
       </svg>
     );
   }
@@ -58,14 +70,118 @@ async function getAllFileEntries(dataTransferItemList: DataTransferItemList): Pr
   return fileEntries;
 }
 
+function FileTreeItem({
+  file,
+  depth,
+  selectedFile,
+  onSelect,
+  expandedFolders,
+  onToggleExpand,
+  folderContents,
+}: {
+  file: FileInfo;
+  depth: number;
+  selectedFile: string | null;
+  onSelect: (path: string) => void;
+  expandedFolders: Set<string>;
+  onToggleExpand: (path: string) => void;
+  folderContents: Map<string, FileInfo[]>;
+}) {
+  const isExpanded = expandedFolders.has(file.path);
+  const children = folderContents.get(file.path) || [];
+
+  const handleClick = () => {
+    if (file.isDirectory) {
+      onToggleExpand(file.path);
+    } else {
+      onSelect(file.path);
+    }
+  };
+
+  return (
+    <li>
+      <button
+        onClick={handleClick}
+        className={cn(
+          "w-full flex items-center gap-2 py-1 text-sm text-left rounded transition-colors",
+          selectedFile === file.path
+            ? "bg-dracula-selection text-dracula-foreground"
+            : "text-dracula-foreground hover:bg-dracula-bg-light"
+        )}
+        style={{ paddingLeft: `${depth * 12 + 16}px` }}
+      >
+        {file.isDirectory && (
+          <svg
+            className={cn("w-3 h-3 text-dracula-comment transition-transform", isExpanded && "rotate-90")}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        )}
+        {!file.isDirectory && <span className="w-3" />}
+        <FileIcon isDirectory={file.isDirectory} isExpanded={isExpanded} />
+        <span className="truncate">{file.name}</span>
+      </button>
+      {file.isDirectory && isExpanded && children.length > 0 && (
+        <ul className="space-y-0.5">
+          {children.map((child) => (
+            <FileTreeItem
+              key={child.path}
+              file={child}
+              depth={depth + 1}
+              selectedFile={selectedFile}
+              onSelect={onSelect}
+              expandedFolders={expandedFolders}
+              onToggleExpand={onToggleExpand}
+              folderContents={folderContents}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 export function FileExplorer() {
   const { files, selectedFile, refreshFiles, selectFile } = useApp();
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [folderContents, setFolderContents] = useState<Map<string, FileInfo[]>>(new Map());
 
   useEffect(() => {
     refreshFiles();
   }, [refreshFiles]);
+
+  const loadFolderContents = useCallback(async (folderPath: string) => {
+    try {
+      const res = await fetch(`/api/files?path=${encodeURIComponent(folderPath)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setFolderContents((prev) => new Map(prev).set(folderPath, data));
+      }
+    } catch (error) {
+      console.error("Failed to load folder contents:", error);
+    }
+  }, []);
+
+  const handleToggleExpand = useCallback(
+    async (folderPath: string) => {
+      const newExpanded = new Set(expandedFolders);
+      if (newExpanded.has(folderPath)) {
+        newExpanded.delete(folderPath);
+      } else {
+        newExpanded.add(folderPath);
+        if (!folderContents.has(folderPath)) {
+          await loadFolderContents(folderPath);
+        }
+      }
+      setExpandedFolders(newExpanded);
+    },
+    [expandedFolders, folderContents, loadFolderContents]
+  );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -104,6 +220,8 @@ export function FileExplorer() {
       });
 
       if (response.ok) {
+        // Clear cached folder contents so they reload
+        setFolderContents(new Map());
         await refreshFiles();
       } else {
         console.error("Upload failed");
@@ -114,6 +232,13 @@ export function FileExplorer() {
       setIsUploading(false);
     }
   }, [refreshFiles]);
+
+  const handleSelectFile = useCallback(
+    (filePath: string) => {
+      selectFile(filePath);
+    },
+    [selectFile]
+  );
 
   return (
     <div
@@ -168,20 +293,16 @@ export function FileExplorer() {
             ) : (
               <ul className="space-y-0.5">
                 {files.map((file) => (
-                  <li key={file.name}>
-                    <button
-                      onClick={() => selectFile(file.name)}
-                      className={cn(
-                        "w-full flex items-center gap-2 px-4 py-1 text-sm text-left rounded transition-colors",
-                        selectedFile === file.name
-                          ? "bg-dracula-selection text-dracula-foreground"
-                          : "text-dracula-foreground hover:bg-dracula-bg-light"
-                      )}
-                    >
-                      <FileIcon isDirectory={file.isDirectory} />
-                      <span className="truncate">{file.name}</span>
-                    </button>
-                  </li>
+                  <FileTreeItem
+                    key={file.path}
+                    file={file}
+                    depth={0}
+                    selectedFile={selectedFile}
+                    onSelect={handleSelectFile}
+                    expandedFolders={expandedFolders}
+                    onToggleExpand={handleToggleExpand}
+                    folderContents={folderContents}
+                  />
                 ))}
               </ul>
             )}
