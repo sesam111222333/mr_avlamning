@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "deploy": "./deploy.sh"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",
